@@ -1,0 +1,104 @@
+# Prometheus Configuration for 3db Unified Database Ecosystem
+# This configuration sets up monitoring for all 3db components
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Rule files
+rule_files:
+  - "alert_rules.yml"
+
+# Alert manager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # 3db API Server
+  - job_name: '3db-api'
+    static_configs:
+      - targets: ['app-server:8001']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  # PostgreSQL Database Metrics (using postgres_exporter)
+  - job_name: 'postgresql-main'
+    static_configs:
+      - targets: ['postgresql-main:9187']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'postgresql-vector'
+    static_configs:
+      - targets: ['postgresql-vector:9187']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  - job_name: 'postgresql-graph'
+    static_configs:
+      - targets: ['postgresql-graph:9187']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Redis Metrics (using redis_exporter)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:9121']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  # Node Exporter for system metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  # 3db Custom Metrics
+  - job_name: '3db-sync-metrics'
+    static_configs:
+      - targets: ['app-server:8002']  # Custom sync metrics endpoint
+    metrics_path: '/sync-metrics'
+    scrape_interval: 30s
+
+  # Vector Database Specific Metrics
+  - job_name: '3db-vector-metrics'
+    static_configs:
+      - targets: ['app-server:8003']  # Custom vector metrics endpoint
+    metrics_path: '/vector-metrics'
+    scrape_interval: 20s
+
+  # Graph Database Specific Metrics
+  - job_name: '3db-graph-metrics'
+    static_configs:
+      - targets: ['app-server:8004']  # Custom graph metrics endpoint
+    metrics_path: '/graph-metrics'
+    scrape_interval: 20s
+
+# Storage configuration
+storage:
+  tsdb:
+    path: /prometheus/data
+    retention.time: 30d
+    retention.size: 50GB
+
+# Remote write configuration (for long-term storage)
+# remote_write:
+#   - url: "https://your-remote-storage/api/v1/write"
+#     basic_auth:
+#       username: "your_username"
+#       password: "your_password"
+
+# Recording rules for performance optimization
+# rule_files:
+#   - "recording_rules.yml"

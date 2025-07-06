@@ -1,0 +1,388 @@
+# 3db Unified Database Ecosystem - Docker Compose
+# Complete deployment setup for PostgreSQL, pgvector, Apache AGE, and Redis
+
+version: '3.8'
+
+services:
+  # =====================================================================================
+  # POSTGRESQL WITH PGVECTOR AND APACHE AGE
+  # =====================================================================================
+  
+  postgresql-main:
+    image: apache/age:PG15-v1.4.0  # Includes PostgreSQL 15 with AGE extension
+    container_name: 3db-postgresql-main
+    environment:
+      POSTGRES_DB: unified_3db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: your_secure_password_here
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgresql_main_data:/var/lib/postgresql/data
+      - ./schemas/postgresql_schema.sql:/docker-entrypoint-initdb.d/01-postgresql-schema.sql
+      - ./schemas/age_graph_schema.sql:/docker-entrypoint-initdb.d/02-age-graph-schema.sql
+      - ./scripts/install_pgvector.sql:/docker-entrypoint-initdb.d/03-install-pgvector.sql
+    networks:
+      - 3db-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d unified_3db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =====================================================================================
+  # SEPARATE VECTOR DATABASE (OPTIONAL - FOR SCALING)
+  # =====================================================================================
+  
+  postgresql-vector:
+    image: pgvector/pgvector:pg15  # Specialized pgvector image
+    container_name: 3db-postgresql-vector
+    environment:
+      POSTGRES_DB: unified_3db_vector
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: your_secure_password_here
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgresql_vector_data:/var/lib/postgresql/data
+      - ./scripts/vector_db_init.sql:/docker-entrypoint-initdb.d/01-vector-init.sql
+    networks:
+      - 3db-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d unified_3db_vector"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - separate-databases  # Only start if profile is specified
+
+  # =====================================================================================
+  # SEPARATE GRAPH DATABASE (OPTIONAL - FOR SCALING)
+  # =====================================================================================
+  
+  postgresql-graph:
+    image: apache/age:PG15-v1.4.0
+    container_name: 3db-postgresql-graph
+    environment:
+      POSTGRES_DB: unified_3db_graph
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: your_secure_password_here
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgresql_graph_data:/var/lib/postgresql/data
+      - ./schemas/age_graph_schema.sql:/docker-entrypoint-initdb.d/01-age-graph-schema.sql
+    networks:
+      - 3db-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d unified_3db_graph"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - separate-databases  # Only start if profile is specified
+
+  # =====================================================================================
+  # REDIS FOR EVENT STREAMING AND CACHING
+  # =====================================================================================
+  
+  redis:
+    image: redis:7-alpine
+    container_name: 3db-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass your_redis_password_here
+    volumes:
+      - redis_data:/data
+      - ./config/redis.conf:/usr/local/etc/redis/redis.conf
+    networks:
+      - 3db-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # =====================================================================================
+  # 3db APPLICATION SERVER
+  # =====================================================================================
+  
+  app-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: 3db-app-server
+    environment:
+      # Database connections
+      POSTGRES_HOST: postgresql-main
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: unified_3db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: your_secure_password_here
+      
+      # Vector database (same as main if not using separate)
+      VECTOR_HOST: postgresql-main
+      VECTOR_PORT: 5432
+      VECTOR_DB: unified_3db
+      VECTOR_USER: postgres
+      VECTOR_PASSWORD: your_secure_password_here
+      
+      # Graph database (same as main if not using separate)
+      GRAPH_HOST: postgresql-main
+      GRAPH_PORT: 5432
+      GRAPH_DB: unified_3db
+      GRAPH_USER: postgres
+      GRAPH_PASSWORD: your_secure_password_here
+      
+      # Redis configuration
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: your_redis_password_here
+      
+      # Synchronization settings
+      EDA_ENABLED: "true"
+      CDC_ENABLED: "true"
+      CDC_BATCH_SIZE: 1000
+      CDC_SYNC_INTERVAL_SECONDS: 60
+      
+      # Vector settings
+      EMBEDDING_MODEL: all-MiniLM-L6-v2
+      EMBEDDING_DIMENSION: 384
+      VECTOR_SIMILARITY_THRESHOLD: 0.8
+      
+      # Logging
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      
+      # API settings
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      
+    ports:
+      - "8000:8000"  # API server
+      - "8001:8001"  # Metrics/monitoring
+    volumes:
+      - ./config:/app/config
+      - ./logs:/app/logs
+    depends_on:
+      postgresql-main:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - 3db-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - with-app  # Only start if profile is specified
+
+  # =====================================================================================
+  # MONITORING AND OBSERVABILITY
+  # =====================================================================================
+  
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: 3db-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - 3db-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: 3db-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_INSTALL_PLUGINS: grafana-worldmap-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    networks:
+      - 3db-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # =====================================================================================
+  # DATABASE ADMINISTRATION TOOLS
+  # =====================================================================================
+  
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: 3db-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@3db.local
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./config/pgadmin_servers.json:/pgadmin4/servers.json
+    depends_on:
+      - postgresql-main
+    networks:
+      - 3db-network
+    restart: unless-stopped
+    profiles:
+      - admin-tools
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: 3db-redis-commander
+    environment:
+      REDIS_HOSTS: "local:redis:6379:0:your_redis_password_here"
+      HTTP_USER: admin
+      HTTP_PASSWORD: admin123
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - 3db-network
+    restart: unless-stopped
+    profiles:
+      - admin-tools
+
+  # =====================================================================================
+  # DEVELOPMENT AND TESTING TOOLS
+  # =====================================================================================
+  
+  jupyter:
+    image: jupyter/datascience-notebook:latest
+    container_name: 3db-jupyter
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+      JUPYTER_TOKEN: "3db-development"
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/home/jovyan/work
+      - ./src:/home/jovyan/work/3db-src
+    networks:
+      - 3db-network
+    restart: unless-stopped
+    profiles:
+      - development
+
+  # =====================================================================================
+  # LOAD TESTING AND BENCHMARKING
+  # =====================================================================================
+  
+  locust:
+    image: locustio/locust:latest
+    container_name: 3db-locust
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./tests/load:/mnt/locust
+    command: -f /mnt/locust/locustfile.py --host=http://app-server:8000
+    depends_on:
+      - app-server
+    networks:
+      - 3db-network
+    profiles:
+      - load-testing
+
+# =====================================================================================
+# NETWORKS
+# =====================================================================================
+
+networks:
+  3db-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# =====================================================================================
+# VOLUMES
+# =====================================================================================
+
+volumes:
+  postgresql_main_data:
+    driver: local
+  postgresql_vector_data:
+    driver: local
+  postgresql_graph_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+# =====================================================================================
+# USAGE EXAMPLES
+# =====================================================================================
+
+# Basic setup (single PostgreSQL instance with all features):
+# docker-compose up -d postgresql-main redis
+
+# Full development environment:
+# docker-compose --profile development --profile admin-tools up -d
+
+# Production with separate databases:
+# docker-compose --profile separate-databases --profile monitoring up -d
+
+# Complete setup with monitoring and admin tools:
+# docker-compose --profile separate-databases --profile monitoring --profile admin-tools up -d
+
+# Load testing setup:
+# docker-compose --profile with-app --profile load-testing up -d
+
+# To stop all services:
+# docker-compose down
+
+# To remove all data (DESTRUCTIVE):
+# docker-compose down -v
+
+# To view logs:
+# docker-compose logs -f [service-name]
+
+# To scale specific services:
+# docker-compose up -d --scale app-server=3
