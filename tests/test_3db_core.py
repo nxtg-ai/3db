@@ -169,7 +169,7 @@ class TestEntityManagement:
         db3d = mock_3db_system
         
         # Mock PostgreSQL failure
-        from core.base import QueryResult
+        from src.core.base import QueryResult
         db3d.postgresql_db.create.return_value = QueryResult(
             success=False,
             data=None,
