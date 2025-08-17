@@ -14,10 +14,10 @@ import json
 from sentence_transformers import SentenceTransformer
 from contextlib import asynccontextmanager
 
-from ..core.base import (
+from ...core.base import (
     BaseDatabase, VectorOperations, DatabaseType, QueryResult, EntityMetadata
 )
-from ..core.config import DatabaseConfig
+from ...core.config import DatabaseConfig
 from ..utils.logging import get_logger, monitor_performance, CircuitBreaker
 
 logger = get_logger("vector_db")
