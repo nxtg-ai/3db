@@ -388,7 +388,7 @@ class Database3D:
                 'entity_id': entity_id,
                 'success': success,
                 'results': results,
-                'metadata': metadata.to_dict() if hasattr(metadata, 'to_dict') else str(metadata)
+                'metadata': metadata.to_dict()
             }
             
         except Exception as e:
