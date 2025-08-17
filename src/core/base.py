@@ -8,7 +8,7 @@ and Apache AGE graph databases.
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Union, AsyncGenerator, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from enum import Enum
 import asyncio
@@ -64,6 +64,10 @@ class EntityMetadata:
     def clear_sync_errors(self) -> None:
         """Clear all synchronization errors."""
         self.sync_errors.clear()
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return metadata as a dictionary."""
+        return asdict(self)
 
 
 @dataclass
